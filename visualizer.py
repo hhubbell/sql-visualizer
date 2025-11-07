@@ -145,8 +145,32 @@ class SimplifiedDAG:
 
 
 def read_parse(path: pathlib.Path, dialect=None) -> list:
-    with open(path, 'r') as f:
-        return sqlglot.parse(f.read(), dialect=dialect)
+    """
+    """
+    if path.is_dir():
+        # TODO:
+        # Here we need to "discover" if the directory is a dbt project and
+        # handle the rendering of dbt models. Currently, sqlglot cannot parse
+        # dbt models with {{ ref }} or {{ source }} statements.
+        files = path.glob('**/*.sql')
+    else:
+        files = [path]
+
+    asts = []
+    for file in files:
+        with open(file, 'r') as f:
+            # NOTE:
+            # If reading a directory of files, this places every query in the
+            # same environment. In the future, consider whether scoping these
+            # environments is helpful or worth placing behind a flag.
+            #
+            # For example, if discovered to be in a dbt project, place models
+            # in the same lexical scope by default. Otherwise, if just a
+            # collection of scripts, separate queries into their own envs, and
+            # look to the caller to override this behavior using a cli flag.
+            asts.extend(sqlglot.parse(f.read(), dialect=dialect))
+
+    return asts
 
 def is_create(ast) -> bool:
     return type(ast) == sqlglot.exp.Create
