@@ -1,0 +1,262 @@
+#!/usr/bin/env python
+#
+# Determine which tables are being referenced in a query
+#
+
+import argparse
+import hashlib
+import pathlib
+import tempfile
+import webbrowser
+import sqlglot
+
+
+class DAGNode:
+    
+    def __init__(self, fqn):
+        self.name = fqn
+        self.sources = list()
+        self.slen = 0
+        self.id = None
+
+        self.color = None # TODO
+
+    def __iter__(self):
+        for source in self.sources:
+            yield source
+
+            for sub in source:
+                yield sub
+
+    def add_source(self, source):
+        self.sources.append(source)
+        self.slen += 1
+
+    def pairs(self):
+        for source in self.sources:
+            yield (source, self)
+
+    def deep_pairs(self):
+        for source in self.sources:
+            yield (source, self)
+
+            for sub in source.deep_pairs():
+                yield sub
+
+
+class SimplifiedDAG:
+
+    def __init__(self):
+        self.trees = list()
+        self.colors = dict()
+        self.next_id = 0
+
+    def add_class_style(self, colors):
+        """
+        :param colors: classDef spec: {'class_name': 'fill:#HEXHEX[,etc];'}
+        """
+        self.colors = colors
+
+    def sort(self):
+        self.trees.reverse()
+
+    def pairs(self):
+        for branch in self.trees:
+            for pair in branch.pairs():
+                yield pair
+
+    def add_node(self, node):
+        node.id = self.next_id
+
+        self.trees.append(node)
+        self.next_id += 1
+
+    def root_nodes(self):
+        seen = set()
+
+        for branch in self.trees:
+            for src in branch:
+                if src.slen == 0 and src.name not in seen:
+                    seen.add(src.name)
+                    yield src
+
+    def end_nodes(self):
+        non_end = set()
+
+        for branch in self.trees:
+            for check in self.trees:
+                if branch in check.sources:
+                    non_end.add(branch)
+
+        return set(self.trees) - non_end
+
+    def insert(self, parent, children):
+        self.add_node(parent)
+
+        for child in children:
+            if type(child) is not str:
+                raise Exception("Inserting non string children not supported")
+
+            known = None
+            for branch in self.trees:
+                if child == branch.name:
+                    known = branch
+                    break
+
+            if known is None:
+                known = DAGNode(child)
+                self.add_node(known)
+
+            parent.add_source(known)
+
+    def mm(self):
+        mmc = "\ngraph LR\n"
+
+        node_class = {x: [] for x in self.colors.values()}
+        node_class['sourceNode'] = []
+
+        root_nodes = list(self.root_nodes())
+
+        for branch in self.trees:
+            mmc += f"""\t{branch.id}["{branch.name}"]\n"""
+
+            if branch.color:
+                node_class[branch.color].append(branch.id)
+            elif branch in root_nodes:
+                node_class['sourceNode'].append(branch.id)
+
+            for src, tgt in branch.pairs():
+                mmc += f"""\t{src.id} --> {tgt.id}\n"""
+
+        mmc += ("\n\tclassDef sourceNode fill:#AACCD7,stroke:#05203B;"
+                "\n\tclassDef endQuery fill:#FDE1A7,stroke:#AA9413;")
+
+        for class_nm, class_def in self.colors.items():
+            mmc += f"\n\tclassDef {class_nm} {class_def};"
+        
+        for class_nm, nodes in node_class.items():
+            if nodes:
+                mmc += f"\n\tclass {','.join(str(x) for x in nodes)} {class_nm}"
+
+        mmc += f"\n\tclass {','.join(str(x.id) for x in self.end_nodes())} endQuery"
+        mmc += "\n"
+
+        return mmc
+
+
+def read_parse(path: pathlib.Path, dialect=None) -> list:
+    with open(path, 'r') as f:
+        return sqlglot.parse(f.read(), dialect=dialect)
+
+def is_create(ast) -> bool:
+    return type(ast) == sqlglot.exp.Create
+
+def is_select(ast) -> bool:
+    return type(ast) == sqlglot.exp.Select \
+        or type(ast) == sqlglot.exp.Subquery \
+        or type(ast) == sqlglot.exp.Union
+
+def find_create(ast) -> set:
+    objs = set()
+
+    if is_create(ast):
+        objs.add(ast.this.name.upper())
+
+    return objs
+
+def find_tables(ast) -> set:
+    tables = set()
+
+    # Probably a better way to descend this tree
+    expr = ast.expression if is_create(ast) else ast
+
+    if is_select(expr):
+        ctes = {x.alias.upper() for x in expr.find_all(sqlglot.exp.CTE)}
+
+        for table in expr.find_all(sqlglot.exp.Table):
+            fqn = '.'.join(x.name.upper() for x in table.parts)
+
+            if fqn not in ctes:
+                tables.add(fqn)
+
+    return tables
+
+def short_hash(inpt) -> str:
+    """
+    Generate a short hash for uniquely identifying `select` queries. This
+    is similar to git's short hash in --abbrev-commit
+    """
+    hash_ = hashlib.sha1()
+    hash_.update(str(inpt).encode('utf-8'))
+
+    return hash_.hexdigest()[:6]
+
+def read_template(layout="elk") -> str:
+    return f"""
+        <!DOCTYPE html>
+        <html lang="en">
+        <body>
+            <pre class="mermaid">{{{{ MERMAID }}}}
+            </pre>
+            <script type="module">
+                import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+                import elkLayouts from 'https://cdn.jsdelivr.net/npm/@mermaid-js/layout-elk@0/dist/mermaid-layout-elk.esm.min.mjs';
+
+                mermaid.registerLayoutLoaders(elkLayouts);
+                mermaid.initialize({{theme: 'neutral', layout: '{layout}'}});
+            </script>
+        </body>
+        </html>
+    """
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('infile')
+    parser.add_argument('-d', '--dialect', nargs='?')
+    parser.add_argument('-D', '--dagre', action='store_true')
+    parser.add_argument('-s', '--serve', action='store_true')
+
+    args = parser.parse_args()
+    path = pathlib.Path(args.infile)
+
+    # Dagre is a faster layout but I think it looks messier than ELK. Keep
+    # the option to use the Dagre layout behind a flag.
+    layout = 'dagre' if args.dagre else 'elk'
+
+    ast_list = read_parse(path, args.dialect)
+
+    dag = SimplifiedDAG()
+    for ast in ast_list:
+        if is_create(ast) or is_select(ast):
+            creates = find_create(ast)
+            sources = find_tables(ast)
+
+            node = DAGNode(creates.pop() if creates else "Select#" + short_hash(ast))
+
+            # DEBUG
+            node.ast = ast
+
+            dag.insert(node, sources)
+
+    #dag.sort()
+    dag.add_class_style({
+        "example_a": "fill:#DFA2A9,stroke:#9A6065",
+        "example_b": "fill:#AACCD7,stroke:#05203B",
+        "example_c": "fill:#AACCD7,stroke:#05203B",
+        "example_d": "fill:#F5CCB1,stroke:#AA4900",
+        "example_e": "fill:#D5C8FF,stroke:#080A30"})
+
+    # This is like a hack jinja
+    template = read_template(layout)
+    template = template.replace("{{ MERMAID }}", dag.mm())
+
+    if args.serve:
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.html', encoding='utf-8') as f:
+            f.write(template)
+            outfile = pathlib.Path(f.name)  
+
+        webbrowser.open_new_tab(f"file://{outfile}")
+
+    else:
+        print(template)
