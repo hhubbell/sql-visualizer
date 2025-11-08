@@ -4,6 +4,7 @@
 #
 
 import argparse
+import configparser
 import hashlib
 import pathlib
 import tempfile
@@ -18,8 +19,7 @@ class DAGNode:
         self.sources = list()
         self.slen = 0
         self.id = None
-
-        self.color = None # TODO
+        self.color = None
 
     def __iter__(self):
         for source in self.sources:
@@ -48,14 +48,24 @@ class SimplifiedDAG:
 
     def __init__(self):
         self.trees = list()
-        self.colors = dict()
         self.next_id = 0
+        self.colors = {
+            "sourceNode": "fill:#AACCD7,stroke:#05203B",
+            "endQuery": "fill:#FDE1A7,stroke:#AA9413"}
 
     def add_class_style(self, colors):
         """
         :param colors: classDef spec: {'class_name': 'fill:#HEXHEX[,etc];'}
         """
-        self.colors = colors
+        self.colors.update(colors)
+
+    def set_node_color_rule(self, callback):
+        """
+        Assign the color rule for all nodes
+        :param callback: Color rule callable
+        """
+        for branch in self.trees:
+            branch.color = callback(branch)
 
     def sort(self):
         self.trees.reverse()
@@ -112,33 +122,41 @@ class SimplifiedDAG:
     def mm(self):
         mmc = "\ngraph LR\n"
 
-        node_class = {x: [] for x in self.colors.values()}
+        #node_class = {x: [] for x in self.colors.keys()}
+        node_class = {}
         node_class['sourceNode'] = []
+        node_class['endQuery'] = []
 
         root_nodes = list(self.root_nodes())
+        end_nodes = list(self.end_nodes())
 
         for branch in self.trees:
             mmc += f"""\t{branch.id}["{branch.name}"]\n"""
 
             if branch.color:
+                if branch.color not in node_class:
+                    node_class[branch.color] = []
+
                 node_class[branch.color].append(branch.id)
+
             elif branch in root_nodes:
                 node_class['sourceNode'].append(branch.id)
+
+            elif branch in end_nodes:
+                node_class['endQuery'].append(branch.id)
 
             for src, tgt in branch.pairs():
                 mmc += f"""\t{src.id} --> {tgt.id}\n"""
 
-        mmc += ("\n\tclassDef sourceNode fill:#AACCD7,stroke:#05203B;"
-                "\n\tclassDef endQuery fill:#FDE1A7,stroke:#AA9413;")
-
-        for class_nm, class_def in self.colors.items():
-            mmc += f"\n\tclassDef {class_nm} {class_def};"
+        for class_nm in node_class.keys():
+            class_def = self.colors.get(class_nm)
+            if class_def:
+                mmc += f"\n\tclassDef {class_nm} {class_def};"
         
         for class_nm, nodes in node_class.items():
             if nodes:
                 mmc += f"\n\tclass {','.join(str(x) for x in nodes)} {class_nm}"
 
-        mmc += f"\n\tclass {','.join(str(x.id) for x in self.end_nodes())} endQuery"
         mmc += "\n"
 
         return mmc
@@ -205,6 +223,13 @@ def find_tables(ast) -> set:
 
     return tables
 
+def default_color_rule(node):
+    """
+    Defines the default color rule for nodes styles. Can be overridden.
+    """
+    path = node.name.split('.')
+    return path[0].lower() if len(path) > 1 else None
+
 def short_hash(inpt) -> str:
     """
     Generate a short hash for uniquely identifying `select` queries. This
@@ -214,6 +239,19 @@ def short_hash(inpt) -> str:
     hash_.update(str(inpt).encode('utf-8'))
 
     return hash_.hexdigest()[:6]
+
+def read_config():
+    """
+    """
+    default_path = pathlib.Path("~/.config/sql-visualizer/config")
+
+    if default_path.expanduser().exists():
+        config = configparser.ConfigParser()
+        config.read(default_path.expanduser())
+
+        return dict(config)
+
+    return {}
 
 def read_template(layout="elk") -> str:
     return f"""
@@ -244,6 +282,11 @@ if __name__ == '__main__':
     args = parser.parse_args()
     path = pathlib.Path(args.infile)
 
+    cfg = read_config()
+
+    dialect = args.dialect or cfg.get('general', {}).get('dialect')
+    colors = cfg.get('colors', {})
+
     # Dagre is a faster layout but I think it looks messier than ELK. Keep
     # the option to use the Dagre layout behind a flag.
     layout = 'dagre' if args.dagre else 'elk'
@@ -264,12 +307,8 @@ if __name__ == '__main__':
             dag.insert(node, sources)
 
     #dag.sort()
-    dag.add_class_style({
-        "example_a": "fill:#DFA2A9,stroke:#9A6065",
-        "example_b": "fill:#AACCD7,stroke:#05203B",
-        "example_c": "fill:#AACCD7,stroke:#05203B",
-        "example_d": "fill:#F5CCB1,stroke:#AA4900",
-        "example_e": "fill:#D5C8FF,stroke:#080A30"})
+    dag.add_class_style(colors)
+    dag.set_node_color_rule(default_color_rule)
 
     # This is like a hack jinja
     template = read_template(layout)
