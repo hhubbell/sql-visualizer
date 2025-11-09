@@ -50,8 +50,8 @@ class SimplifiedDAG:
         self.trees = list()
         self.next_id = 0
         self.colors = {
-            "sourceNode": "fill:#AACCD7,stroke:#05203B",
-            "endQuery": "fill:#FDE1A7,stroke:#AA9413"}
+            "srcNode": "fill:#AACCD7,stroke:#05203B",
+            "endNode": "fill:#FDE1A7,stroke:#AA9413"}
 
     def add_class_style(self, colors):
         """
@@ -122,10 +122,9 @@ class SimplifiedDAG:
     def mm(self):
         mmc = "\ngraph LR\n"
 
-        #node_class = {x: [] for x in self.colors.keys()}
-        node_class = {}
-        node_class['sourceNode'] = []
-        node_class['endQuery'] = []
+        node_class = {
+            "srcNode": [],
+            "endNode": []}
 
         root_nodes = list(self.root_nodes())
         end_nodes = list(self.end_nodes())
@@ -140,10 +139,10 @@ class SimplifiedDAG:
                 node_class[branch.color].append(branch.id)
 
             elif branch in root_nodes:
-                node_class['sourceNode'].append(branch.id)
+                node_class['srcNode'].append(branch.id)
 
             elif branch in end_nodes:
-                node_class['endQuery'].append(branch.id)
+                node_class['endNode'].append(branch.id)
 
             for src, tgt in branch.pairs():
                 mmc += f"""\t{src.id} --> {tgt.id}\n"""
@@ -310,11 +309,13 @@ if __name__ == '__main__':
     dag.add_class_style(colors)
     dag.set_node_color_rule(default_color_rule)
 
-    # This is like a hack jinja
-    template = read_template(layout)
-    template = template.replace("{{ MERMAID }}", dag.mm())
+    mermaid = dag.mm()
 
     if args.serve:
+        # This is like a hack jinja
+        template = read_template(layout)
+        template = template.replace("{{ MERMAID }}", mermaid)
+
         with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.html', encoding='utf-8') as f:
             f.write(template)
             outfile = pathlib.Path(f.name)  
@@ -322,4 +323,4 @@ if __name__ == '__main__':
         webbrowser.open_new_tab(f"file://{outfile}")
 
     else:
-        print(template)
+        print(mermaid)
