@@ -50,8 +50,9 @@ class SimplifiedDAG:
         self.trees = list()
         self.next_id = 0
         self.colors = {
-            "srcNode": "fill:#AACCD7,stroke:#05203B",
-            "endNode": "fill:#FDE1A7,stroke:#AA9413"}
+            "srcNode": "fill:#AACCD7,stroke:#666666",
+            "intNode": "fill:#EEEEEE,stroke:#666666",
+            "endNode": "fill:#FDE1A7,stroke:#666666"}
 
     def add_class_style(self, colors):
         """
@@ -124,6 +125,7 @@ class SimplifiedDAG:
 
         node_class = {
             "srcNode": [],
+            "intNode": [],
             "endNode": []}
 
         root_nodes = list(self.root_nodes())
@@ -143,6 +145,9 @@ class SimplifiedDAG:
 
             elif branch in end_nodes:
                 node_class['endNode'].append(branch.id)
+
+            else:
+                node_class['intNode'].append(branch.id)
 
             for src, tgt in branch.pairs():
                 mmc += f"""\t{src.id} --> {tgt.id}\n"""
@@ -256,6 +261,16 @@ def read_template(layout="elk") -> str:
     return f"""
         <!DOCTYPE html>
         <html lang="en">
+        <head>
+        <style>
+            @media (prefers-color-scheme: dark) {{
+                body {{
+                    color: #c5c8c6;
+                    background: #1f1f1f;
+                }}
+            }}
+        </style>
+        </head>
         <body>
             <pre class="mermaid">{{{{ MERMAID }}}}
             </pre>
