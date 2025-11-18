@@ -305,7 +305,7 @@ if __name__ == '__main__':
     # the option to use the Dagre layout behind a flag.
     layout = 'dagre' if args.dagre else 'elk'
 
-    ast_list = read_parse(path, args.dialect)
+    ast_list = read_parse(path, dialect)
 
     dag = SimplifiedDAG()
     for ast in ast_list:
