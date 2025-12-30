@@ -50,8 +50,8 @@ class SimplifiedDAG:
         self.trees = list()
         self.next_id = 0
         self.colors = {
-            "srcNode": "fill:#AACCD7,stroke:#666666",
-            "intNode": "fill:#EEEEEE,stroke:#666666",
+            "srcNode": "fill:#EEEEEE,stroke:#666666",
+            "intNode": "fill:#AACCD7,stroke:#666666",
             "endNode": "fill:#FDE1A7,stroke:#666666"}
 
     def add_class_style(self, colors):
@@ -266,7 +266,7 @@ def read_template(layout="elk") -> str:
             @media (prefers-color-scheme: dark) {{
                 body {{
                     color: #c5c8c6;
-                    background: #1f1f1f;
+                    background: #383d3f;
                 }}
             }}
         </style>
