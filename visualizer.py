@@ -269,17 +269,42 @@ def read_template(layout="elk") -> str:
                     background: #383d3f;
                 }}
             }}
+
+            html,
+            body,
+            #mermaid-container,
+            .mermaid {{
+                height: 100%;
+            }}
         </style>
         </head>
         <body>
-            <pre class="mermaid">{{{{ MERMAID }}}}
-            </pre>
+            <div id="mermaid-container">
+                <pre class="mermaid">{{{{ MERMAID }}}}
+                </pre>
+            </div>
             <script type="module">
                 import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
                 import elkLayouts from 'https://cdn.jsdelivr.net/npm/@mermaid-js/layout-elk@0/dist/mermaid-layout-elk.esm.min.mjs';
+                import panzoom from 'https://cdn.jsdelivr.net/npm/@panzoom/panzoom@4.6.1/+esm';
 
                 mermaid.registerLayoutLoaders(elkLayouts);
                 mermaid.initialize({{theme: 'neutral', layout: '{layout}'}});
+
+                await mermaid.run({{
+                    querySelector: '.mermaid',
+                    postRenderCallback: (id) => {{
+                        const cont = document.getElementById("mermaid-container");
+                        const plot = cont.querySelector("svg");
+
+                        const pz = panzoom(plot, {{
+                            maxScale: 10,
+                            minScale: 0.1,
+                            step: 0.5}});
+
+                        cont.addEventListener("wheel", pz.zoomWithWheel);
+                    }}
+                }});
             </script>
         </body>
         </html>
