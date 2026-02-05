@@ -68,7 +68,7 @@ class SimplifiedDAG:
         for branch in self.trees:
             branch.color = callback(branch)
 
-    def sort(self, key):
+    def sort(self, key=key):
         self.trees.sort(key=key)
 
     def pairs(self):
