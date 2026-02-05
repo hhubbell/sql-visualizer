@@ -68,8 +68,8 @@ class SimplifiedDAG:
         for branch in self.trees:
             branch.color = callback(branch)
 
-    def sort(self):
-        self.trees.reverse()
+    def sort(self, key):
+        self.trees.sort(key=key)
 
     def pairs(self):
         for branch in self.trees:
@@ -229,10 +229,20 @@ def find_tables(ast) -> set:
 
 def default_color_rule(node):
     """
-    Defines the default color rule for nodes styles. Can be overridden.
+    Defines the default color rule for nodes styles.
     """
     path = node.name.split('.')
     return path[0].lower() if len(path) > 1 else None
+
+def default_sort_rule(node):
+    """
+    Defines the default sort rule, intending to group like colors
+    together as often as possible. The layout engine provided to
+    mermaid may not always obey this order, but it works most of most
+    of the time.
+    """
+    color = node.color if node.color is not None else ""
+    return (node.slen, color, node.name)
 
 def short_hash(inpt) -> str:
     """
@@ -345,9 +355,9 @@ if __name__ == '__main__':
 
             dag.insert(node, sources)
 
-    #dag.sort()
     dag.add_class_style(colors)
     dag.set_node_color_rule(default_color_rule)
+    dag.sort(default_sort_rule)
 
     mermaid = dag.mm()
 
