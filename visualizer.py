@@ -40,19 +40,15 @@ class DAGNode:
         self.sources.append(source)
         self.slen += 1
 
+    def swap_source(self, idx, source):
+        self.sources[idx] = source
+
     def sort(self, key=None):
         self.sources.sort(key=key)
 
     def pairs(self):
         for source in self.sources:
             yield (source, self)
-
-    def deep_pairs(self):
-        for source in self.sources:
-            yield (source, self)
-
-            for sub in source.deep_pairs():
-                yield sub
 
 
 class SimplifiedDAG:
@@ -62,6 +58,7 @@ class SimplifiedDAG:
         self.next_id = 0
         self.colors = {
             "srcNode": "fill:#EEEEEE,stroke:#666666",
+            "cteNode": "fill:#7D858D,stroke:#666666",
             "intNode": "fill:#AACCD7,stroke:#666666",
             "endNode": "fill:#FDE1A7,stroke:#666666"}
 
@@ -127,16 +124,16 @@ class SimplifiedDAG:
 
         return seen
 
-    def insert(self, parent, children):
-        self.add_node(parent)
-
-        for child in children:
-            if type(child) is not DAGNode:
-                raise Exception("Arg `children` must be an iter of DAGNode")
+    def insert(self, parent: DAGNode) -> None:
+        for i, child in enumerate(parent.sources):
+            # For CTEs, never search for existing nodes and just append
+            if child.node_t == NodeType.CTE:
+                self.assign_id(child)
+                continue
 
             known = None
             for branch in self.iter_deep():
-                if child.name == branch.name:
+                if child.name == branch.name and branch.node_t != NodeType.CTE:
                     known = branch
                     break
 
@@ -144,17 +141,19 @@ class SimplifiedDAG:
                 if known in self.trees:
                     self.rem_node(known)
 
-            else:
-                known = child
-                self.assign_id(known)
+                parent.swap_source(i, known)
 
-            parent.add_source(known)
+            else:
+                self.assign_id(child)
+
+        self.add_node(parent)
 
     def mm(self):
         mmc = "\ngraph LR\n"
 
         node_class = {
             "srcNode": [],
+            "cteNode": [],
             "intNode": [],
             "endNode": []}
 
@@ -173,6 +172,9 @@ class SimplifiedDAG:
                     node_class[branch.color] = []
 
                 node_class[branch.color].append(branch.id)
+
+            elif branch.node_t == NodeType.CTE:
+                node_class['cteNode'].append(branch.id)
 
             elif branch in root_nodes:
                 node_class['srcNode'].append(branch.id)
@@ -242,24 +244,48 @@ def find_statement(ast) -> DAGNode:
     else:
         return DAGNode("Select#" + short_hash(ast), NodeType.Select)
 
-
-def find_tables(ast) -> set:
+def find_tables(ast, simple) -> set:
     tables = set()
+    seen = set()
 
     # Probably a better way to descend this tree
     expr = ast.expression if is_create(ast) else ast
 
     if is_select(expr):
-        ctes = {x.alias.upper() for x in expr.find_all(sqlglot.exp.CTE)}
+        for cte in expr.find_all(sqlglot.exp.CTE):
+            node = DAGNode(cte.alias.upper(), NodeType.CTE)
+
+            if simple is False:
+                for source in find_tables(cte.this, simple):
+                    node.add_source(source)
+                    # FIXME: This is going to break multiple table references
+                    # in CTEs and directly
+                    seen.add(source.name)
+
+                tables.add(node)
+
+            seen.add(node.name)
 
         for table in expr.find_all(sqlglot.exp.Table):
             fqn = '.'.join(x.name.upper() for x in table.parts)
 
-            if fqn not in ctes:
+            if fqn not in seen:
                 node = DAGNode(fqn, NodeType.Table)
                 tables.add(node)
 
     return tables
+
+def process_ast(ast, simple) -> DAGNode:
+    if is_create(ast) or is_select(ast):
+        node = find_statement(ast)
+
+        for source in find_tables(ast, simple):
+            node.add_source(source)
+
+        # DEBUG
+        node.ast = ast
+
+        return node
 
 def default_color_rule(node):
     """
@@ -361,6 +387,7 @@ if __name__ == '__main__':
     parser.add_argument('-d', '--dialect', nargs='?')
     parser.add_argument('-D', '--dagre', action='store_true')
     parser.add_argument('-s', '--serve', action='store_true')
+    parser.add_argument('-S', '--simple', action='store_true')
 
     args = parser.parse_args()
     path = pathlib.Path(args.infile)
@@ -378,14 +405,16 @@ if __name__ == '__main__':
 
     dag = SimplifiedDAG()
     for ast in ast_list:
-        if is_create(ast) or is_select(ast):
-            node = find_statement(ast)
-            sources = find_tables(ast)
+        node = process_ast(ast, args.simple)
 
-            # DEBUG
-            node.ast = ast
+        if node is not None:
+            dag.insert(node)
 
-            dag.insert(node, sources)
+    # FIXME: Determine why we aren't setting this correctly
+    for node in dag.iter_deep():
+        if node.id is None:
+            dag.assign_id(node)
+    # ENDFIXME
 
     dag.add_class_style(colors)
     dag.set_node_color_rule(default_color_rule)
