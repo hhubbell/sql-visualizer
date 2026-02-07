@@ -40,6 +40,9 @@ class DAGNode:
         self.sources.append(source)
         self.slen += 1
 
+    def sort(self, key=None):
+        self.sources.sort(key=key)
+
     def pairs(self):
         for source in self.sources:
             yield (source, self)
@@ -79,35 +82,50 @@ class SimplifiedDAG:
     def sort(self, key=None):
         self.trees.sort(key=key)
 
-    def pairs(self):
         for branch in self.trees:
-            for pair in branch.pairs():
-                yield pair
+            branch.sort(key=key)
+
+    def iter_deep(self):
+        for branch in self.trees:
+            yield branch
+
+            for node in branch:
+                yield node
+
+    def assign_id(self, node):
+        node.id = self.next_id
+        self.next_id += 1
 
     def add_node(self, node):
-        node.id = self.next_id
-
+        self.assign_id(node)
         self.trees.append(node)
-        self.next_id += 1
+
+    def rem_node(self, node):
+        self.trees.remove(node)
 
     def root_nodes(self):
         seen = set()
 
-        for branch in self.trees:
-            for src in branch:
-                if src.slen == 0 and src.name not in seen:
-                    seen.add(src.name)
-                    yield src
+        for src in self.iter_deep():
+            if src.slen == 0 and src.name not in seen:
+                seen.add(src.name)
+                yield src
 
     def end_nodes(self):
-        non_end = set()
+        return self.trees
 
-        for branch in self.trees:
-            for check in self.trees:
-                if branch in check.sources:
-                    non_end.add(branch)
+    def unq_nodes(self):
+        """
+        Returns the unique nodes in the DAG, while retaining sorting
+        slightly better than `set`
+        """
+        seen = list()
 
-        return set(self.trees) - non_end
+        for node in self.iter_deep():
+            if node.name not in seen:
+                seen.append(node)
+
+        return seen
 
     def insert(self, parent, children):
         self.add_node(parent)
@@ -117,14 +135,18 @@ class SimplifiedDAG:
                 raise Exception("Arg `children` must be an iter of DAGNode")
 
             known = None
-            for branch in self.trees:
+            for branch in self.iter_deep():
                 if child.name == branch.name:
                     known = branch
                     break
 
-            if known is None:
+            if known is not None:
+                if known in self.trees:
+                    self.rem_node(known)
+
+            else:
                 known = child
-                self.add_node(known)
+                self.assign_id(known)
 
             parent.add_source(known)
 
@@ -139,7 +161,11 @@ class SimplifiedDAG:
         root_nodes = list(self.root_nodes())
         end_nodes = list(self.end_nodes())
 
-        for branch in self.trees:
+        # Any given node can reference a node that has already been seen, so
+        # this needs to be deduplicated. Probably a better way to do this
+        unq_nodes = self.unq_nodes()
+
+        for branch in unq_nodes:
             mmc += f"""\t{branch.id}["{branch.name}"]\n"""
 
             if branch.color:
