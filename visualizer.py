@@ -5,6 +5,7 @@
 
 import argparse
 import configparser
+import enum
 import hashlib
 import pathlib
 import tempfile
@@ -12,10 +13,17 @@ import webbrowser
 import sqlglot
 
 
+class NodeType(enum.Enum):
+    CTE = 0
+    Table = 1
+    Select = 2
+
+
 class DAGNode:
     
-    def __init__(self, fqn):
+    def __init__(self, fqn, node_t):
         self.name = fqn
+        self.node_t = node_t
         self.sources = list()
         self.slen = 0
         self.id = None
@@ -105,17 +113,17 @@ class SimplifiedDAG:
         self.add_node(parent)
 
         for child in children:
-            if type(child) is not str:
-                raise Exception("Inserting non string children not supported")
+            if type(child) is not DAGNode:
+                raise Exception("Arg `children` must be an iter of DAGNode")
 
             known = None
             for branch in self.trees:
-                if child == branch.name:
+                if child.name == branch.name:
                     known = branch
                     break
 
             if known is None:
-                known = DAGNode(child)
+                known = child
                 self.add_node(known)
 
             parent.add_source(known)
@@ -202,13 +210,12 @@ def is_select(ast) -> bool:
         or type(ast) == sqlglot.exp.Subquery \
         or type(ast) == sqlglot.exp.Union
 
-def find_create(ast) -> set:
-    objs = set()
-
+def find_statement(ast) -> DAGNode:
     if is_create(ast):
-        objs.add(ast.this.name.upper())
+        return DAGNode(ast.this.name.upper(), NodeType.Table)
+    else:
+        return DAGNode("Select#" + short_hash(ast), NodeType.Select)
 
-    return objs
 
 def find_tables(ast) -> set:
     tables = set()
@@ -223,7 +230,8 @@ def find_tables(ast) -> set:
             fqn = '.'.join(x.name.upper() for x in table.parts)
 
             if fqn not in ctes:
-                tables.add(fqn)
+                node = DAGNode(fqn, NodeType.Table)
+                tables.add(node)
 
     return tables
 
@@ -345,10 +353,8 @@ if __name__ == '__main__':
     dag = SimplifiedDAG()
     for ast in ast_list:
         if is_create(ast) or is_select(ast):
-            creates = find_create(ast)
+            node = find_statement(ast)
             sources = find_tables(ast)
-
-            node = DAGNode(creates.pop() if creates else "Select#" + short_hash(ast))
 
             # DEBUG
             node.ast = ast
