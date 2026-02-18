@@ -126,11 +126,6 @@ class SimplifiedDAG:
 
     def insert(self, parent: DAGNode) -> None:
         for i, child in enumerate(parent.sources):
-            # For CTEs, never search for existing nodes and just append
-            if child.node_t == NodeType.CTE:
-                self.assign_id(child)
-                continue
-
             known = None
             for branch in self.iter_deep():
                 if child.name == branch.name and branch.node_t != NodeType.CTE:
@@ -246,30 +241,17 @@ def find_statement(ast) -> DAGNode:
 
 def find_tables(ast, simple) -> set:
     tables = set()
-    seen = set()
 
     # Probably a better way to descend this tree
     expr = ast.expression if is_create(ast) else ast
 
     if is_select(expr):
-        for cte in expr.find_all(sqlglot.exp.CTE):
-            node = DAGNode(cte.alias.upper(), NodeType.CTE)
-
-            if simple is False:
-                for source in find_tables(cte.this, simple):
-                    node.add_source(source)
-                    # FIXME: This is going to break multiple table references
-                    # in CTEs and directly
-                    seen.add(source.name)
-
-                tables.add(node)
-
-            seen.add(node.name)
+        ctes = {x.alias.upper() for x in expr.find_all(sqlglot.exp.CTE)}
 
         for table in expr.find_all(sqlglot.exp.Table):
             fqn = '.'.join(x.name.upper() for x in table.parts)
 
-            if fqn not in seen:
+            if fqn not in ctes:
                 node = DAGNode(fqn, NodeType.Table)
                 tables.add(node)
 
@@ -409,12 +391,6 @@ if __name__ == '__main__':
 
         if node is not None:
             dag.insert(node)
-
-    # FIXME: Determine why we aren't setting this correctly
-    for node in dag.iter_deep():
-        if node.id is None:
-            dag.assign_id(node)
-    # ENDFIXME
 
     dag.add_class_style(colors)
     dag.set_node_color_rule(default_color_rule)
