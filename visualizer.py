@@ -77,6 +77,9 @@ class SimplifiedDAG:
         for branch in self.trees:
             branch.color = callback(branch)
 
+            for leaf in branch:
+                leaf.color = callback(leaf)
+
     def sort(self, key=None):
         """
         Sort the DAG using an optionally provided callable. Sorting is used
