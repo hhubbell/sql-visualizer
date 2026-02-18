@@ -231,7 +231,9 @@ def is_create(ast) -> bool:
 def is_select(ast) -> bool:
     return type(ast) == sqlglot.exp.Select \
         or type(ast) == sqlglot.exp.Subquery \
-        or type(ast) == sqlglot.exp.Union
+        or type(ast) == sqlglot.exp.Union \
+        or type(ast) == sqlglot.exp.Intersect \
+        or type(ast) == sqlglot.exp.Except
 
 def find_statement(ast) -> DAGNode:
     if is_create(ast):
