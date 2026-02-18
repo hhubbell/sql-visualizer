@@ -9,6 +9,7 @@ import enum
 import hashlib
 import pathlib
 import tempfile
+from typing import Self
 import webbrowser
 import sqlglot
 
@@ -21,7 +22,7 @@ class NodeType(enum.Enum):
 
 class DAGNode:
     
-    def __init__(self, fqn, node_t):
+    def __init__(self, fqn: str, node_t: NodeType):
         self.name = fqn
         self.node_t = node_t
         self.sources = list()
@@ -36,11 +37,11 @@ class DAGNode:
             for sub in source:
                 yield sub
 
-    def add_source(self, source):
+    def add_source(self, source: Self):
         self.sources.append(source)
         self.slen += 1
 
-    def swap_source(self, idx, source):
+    def swap_source(self, idx: int, source: Self):
         self.sources[idx] = source
 
     def sort(self, key=None):
@@ -62,45 +63,67 @@ class SimplifiedDAG:
             "intNode": "fill:#AACCD7,stroke:#666666",
             "endNode": "fill:#FDE1A7,stroke:#666666"}
 
-    def add_class_style(self, colors):
+    def add_class_style(self, colors: dict[str, str]):
         """
-        :param colors: classDef spec: {'class_name': 'fill:#HEXHEX[,etc];'}
+        Add a new color rule to the mermaid diagram. Must follow the mermaid
+        classDef spec: {'class_name': 'fill:#HEXHEX[,etc];'}
         """
         self.colors.update(colors)
 
     def set_node_color_rule(self, callback):
         """
-        Assign the color rule for all nodes
-        :param callback: Color rule callable
+        Assign the color rule for all nodes using a color rule callable.
         """
         for branch in self.trees:
             branch.color = callback(branch)
 
     def sort(self, key=None):
+        """
+        Sort the DAG using an optionally provided callable. Sorting is used
+        to reorder nodes in the trees, which can impact how they are rendered
+        by mermaid. This is helpful for keeping certain nodes grouped, but is
+        not always guaranteed.
+        """
         self.trees.sort(key=key)
 
         for branch in self.trees:
             branch.sort(key=key)
 
     def iter_deep(self):
+        """
+        Iterate over the DAG's trees, descending each branch until exhaustion.
+        """
         for branch in self.trees:
             yield branch
 
             for node in branch:
                 yield node
 
-    def assign_id(self, node):
+    def assign_id(self, node: DAGNode):
+        """
+        Assign an ID to a node in the DAG. This ID is used by the mermaid
+        rendering step.
+        """
         node.id = self.next_id
         self.next_id += 1
 
-    def add_node(self, node):
+    def add_node(self, node: DAGNode):
+        """
+        Add a node to the DAG's root node list.
+        """
         self.assign_id(node)
         self.trees.append(node)
 
-    def rem_node(self, node):
+    def rem_node(self, node: DAGNode):
+        """
+        Remove a given node from the DAG's root node list.
+        """
         self.trees.remove(node)
 
     def root_nodes(self):
+        """
+        Returns root nodes of the DAG: those without any sources.
+        """
         seen = set()
 
         for src in self.iter_deep():
@@ -109,12 +132,16 @@ class SimplifiedDAG:
                 yield src
 
     def end_nodes(self):
+        """
+        Returns leaf nodes of the DAG: those which are not sources of
+        any other nodes.
+        """
         return self.trees
 
     def unq_nodes(self):
         """
         Returns the unique nodes in the DAG, while retaining sorting
-        slightly better than `set`
+        slightly better than `set`.
         """
         seen = list()
 
@@ -125,6 +152,10 @@ class SimplifiedDAG:
         return seen
 
     def insert(self, parent: DAGNode) -> None:
+        """
+        Insert a node into the DAG. Associate any previously known sources
+        with this node's sources, invalidating previously generated nodes.
+        """
         for i, child in enumerate(parent.sources):
             known = None
             for branch in self.iter_deep():
@@ -143,7 +174,10 @@ class SimplifiedDAG:
 
         self.add_node(parent)
 
-    def mm(self):
+    def mm(self) -> str:
+        """
+        Generate a flowchart mermaid graph diagram from the DAG.
+        """
         mmc = "\ngraph LR\n"
 
         node_class = {
@@ -199,6 +233,8 @@ class SimplifiedDAG:
 
 def read_parse(path: pathlib.Path, dialect=None) -> list:
     """
+    Read and parse a sql file or a directory of sql files, returning a list
+    of ASTs.
     """
     if path.is_dir():
         # TODO:
@@ -225,23 +261,23 @@ def read_parse(path: pathlib.Path, dialect=None) -> list:
 
     return asts
 
-def is_create(ast) -> bool:
+def is_create(ast: sqlglot.exp.Expression) -> bool:
     return type(ast) == sqlglot.exp.Create
 
-def is_select(ast) -> bool:
+def is_select(ast: sqlglot.exp.Expression) -> bool:
     return type(ast) == sqlglot.exp.Select \
         or type(ast) == sqlglot.exp.Subquery \
         or type(ast) == sqlglot.exp.Union \
         or type(ast) == sqlglot.exp.Intersect \
         or type(ast) == sqlglot.exp.Except
 
-def find_statement(ast) -> DAGNode:
+def find_statement(ast: sqlglot.exp.Expression) -> DAGNode:
     if is_create(ast):
         return DAGNode(ast.this.name.upper(), NodeType.Table)
     else:
         return DAGNode("Select#" + short_hash(ast), NodeType.Select)
 
-def find_tables(ast, simple) -> set:
+def find_tables(ast: sqlglot.exp.Expression, incl_subquery: bool) -> set:
     tables = set()
 
     # Probably a better way to descend this tree
@@ -259,11 +295,11 @@ def find_tables(ast, simple) -> set:
 
     return tables
 
-def process_ast(ast, simple) -> DAGNode:
+def process_ast(ast: sqlglot.exp.Expression, incl_subquery: bool) -> DAGNode:
     if is_create(ast) or is_select(ast):
         node = find_statement(ast)
 
-        for source in find_tables(ast, simple):
+        for source in find_tables(ast, incl_subquery):
             node.add_source(source)
 
         # DEBUG
@@ -271,14 +307,14 @@ def process_ast(ast, simple) -> DAGNode:
 
         return node
 
-def default_color_rule(node):
+def default_color_rule(node: DAGNode):
     """
     Defines the default color rule for nodes styles.
     """
     path = node.name.split('.')
     return path[0].lower() if len(path) > 1 else None
 
-def default_sort_rule(node):
+def default_sort_rule(node: DAGNode):
     """
     Defines the default sort rule, intending to group like colors
     together as often as possible. The layout engine provided to
@@ -371,7 +407,7 @@ if __name__ == '__main__':
     parser.add_argument('-d', '--dialect', nargs='?')
     parser.add_argument('-D', '--dagre', action='store_true')
     parser.add_argument('-s', '--serve', action='store_true')
-    parser.add_argument('-S', '--simple', action='store_true')
+    parser.add_argument('-S', '--show-subquery', action='store_true')
 
     args = parser.parse_args()
     path = pathlib.Path(args.infile)
@@ -389,7 +425,7 @@ if __name__ == '__main__':
 
     dag = SimplifiedDAG()
     for ast in ast_list:
-        node = process_ast(ast, args.simple)
+        node = process_ast(ast, args.show_subquery)
 
         if node is not None:
             dag.insert(node)
